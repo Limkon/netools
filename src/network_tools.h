@@ -1,3 +1,4 @@
+#ifndef NETWORK_TOOLS_H
 #define NETWORK_TOOLS_H
 
 #include <windows.h>
@@ -33,4 +34,4 @@ unsigned int __stdcall thread_extract_ip(void* arg);
 // 辅助函数：释放参数内存
 void free_thread_params(ThreadParams* params);
 
-#endif // NETWORK_TOOLS_H"
+#endif // NETWORK_TOOLS_H
