@@ -538,6 +538,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         }
         break;
 
+    // === 修复界面色差问题 ===
+    // 拦截静态文本和按钮（分组框）的颜色消息，设置背景透明
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+        {
+            HDC hdc = (HDC)wParam;
+            SetBkMode(hdc, TRANSPARENT);
+            // 返回白色画刷（因为主窗口背景是白色的）
+            return (LRESULT)GetStockObject(WHITE_BRUSH);
+        }
+
     case WM_DESTROY:
         if (isProxySet) proxy_unset_system();
         PostQuitMessage(0);
