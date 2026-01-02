@@ -23,6 +23,7 @@ typedef struct {
     wchar_t* portsInput;   
     int retryCount;
     int timeoutMs;
+    int showLocation; // [新增] 是否显示IP归属地
 } ThreadParams;
 
 // 任务控制
@@ -41,5 +42,8 @@ unsigned int __stdcall thread_single_scan(void* arg);
 unsigned int __stdcall thread_extract_ip(void* arg);
 
 void free_thread_params(ThreadParams* params);
+
+// [修改] 增加 col6 参数
+void post_result(HWND hwnd, const wchar_t* col1, const wchar_t* col2, const wchar_t* col3, const wchar_t* col4, const wchar_t* col5, const wchar_t* col6);
 
 #endif // NETWORK_TOOLS_H
