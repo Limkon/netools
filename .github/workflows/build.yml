@@ -1,107 +1,27 @@
-name: Windows Build (Deploy)
+name: Build C Win32 Project
 
-on: workflow_dispatch
-
-env:
-  QT_VERSION: '6.5.0'
-  QT_ARCH: 'win64_msvc2019_64'
-  QT_INSTALL_DIR: '${{ github.workspace }}/Qt'
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
 
 jobs:
-  prepare-dependencies:
+  build:
     runs-on: windows-latest
+
     steps:
-      - name: Compute Cache Key
-        id: cache-key
-        shell: powershell
-        run: |
-          echo "key=qt-${{ env.QT_VERSION }}-${{ env.QT_ARCH }}" >> $env:GITHUB_OUTPUT
-
-      - name: Restore Qt Cache
-        id: cache-qt
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.QT_INSTALL_DIR }}
-          key: ${{ steps.cache-key.outputs.key }}
-
-      - name: Install Qt (If Cache Miss)
-        if: steps.cache-qt.outputs.cache-hit != 'true'
-        uses: jurplel/install-qt-action@v3
-        with:
-          version: ${{ env.QT_VERSION }}
-          host: 'windows'
-          target: 'desktop'
-          arch: ${{ env.QT_ARCH }}
-          dir: ${{ env.QT_INSTALL_DIR }}
-          cache: 'false'
-          setup-python: 'false' 
-
-  build-application:
-    needs: prepare-dependencies
-    runs-on: windows-latest
-    
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Compute Cache Key
-      id: cache-key
-      shell: powershell
-      run: |
-        echo "key=qt-${{ env.QT_VERSION }}-${{ env.QT_ARCH }}" >> $env:GITHUB_OUTPUT
-
-    - name: Restore Qt Cache
-      id: cache-qt
-      uses: actions/cache@v4
-      with:
-        path: ${{ env.QT_INSTALL_DIR }}
-        key: ${{ steps.cache-key.outputs.key }}
-
-    - name: Install Qt (Fallback)
-      if: steps.cache-qt.outputs.cache-hit != 'true'
-      uses: jurplel/install-qt-action@v3
-      with:
-        version: ${{ env.QT_VERSION }}
-        host: 'windows'
-        target: 'desktop'
-        arch: ${{ env.QT_ARCH }}
-        dir: ${{ env.QT_INSTALL_DIR }}
-        cache: 'false'
-        setup-python: 'false'
-
-    - name: Setup Qt Environment
-      shell: powershell
-      run: |
-        $qtPath = "${{ env.QT_INSTALL_DIR }}\Qt\${{ env.QT_VERSION }}\msvc2019_64"
-        echo "Qt6_DIR=$qtPath" >> $env:GITHUB_ENV
-        echo "CMAKE_PREFIX_PATH=$qtPath" >> $env:GITHUB_ENV
-        echo "$qtPath\bin" >> $env:GITHUB_PATH
+    - uses: actions/checkout@v3
 
     - name: Configure CMake
-      run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+      # 使用 Visual Studio 生成器，构建 Release 版本
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=Release
 
     - name: Build
-      run: cmake --build build --config Release
+      run: cmake --build ${{github.workspace}}/build --config Release
 
-    # --- 以下是新增/修改的打包步骤 ---
-
-    # 1. 创建一个干净的发布目录，把 exe 拷进去
-    - name: Create Publish Directory
-      shell: powershell
-      run: |
-        New-Item -ItemType Directory -Force -Path "publish"
-        Copy-Item "build\Release\NetToolPro.exe" -Destination "publish\"
-
-    # 2. 运行 windeployqt 自动抓取缺失的 DLL
-    # --dir .: 输出到当前目录
-    # --compiler-runtime: 同时打包 VC++ 运行库，防止别人电脑缺运行库
-    - name: Run windeployqt (Package DLLs)
-      shell: powershell
-      run: |
-        windeployqt --release --compiler-runtime --no-translations --dir publish publish\NetToolPro.exe
-
-    # 3. 上传整个 publish 文件夹，而不是单个 exe
     - name: Upload Artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v3
       with:
-        name: NetToolPro-Windows-Release
-        path: publish/
+        name: NetToolPro-Win32
+        path: ${{github.workspace}}/build/Release/NetToolPro.exe
