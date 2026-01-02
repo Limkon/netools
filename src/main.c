@@ -1,8 +1,9 @@
+// === 核心修复：将 network_tools.h 放在最前面，因为它包含了 winsock2.h ===
+#include "network_tools.h" 
 #include <windows.h>
 #include <commctrl.h>
 #include <stdio.h>
 #include <shlobj.h>
-#include "network_tools.h"
 
 #pragma comment(lib, "comctl32.lib")
 
@@ -26,7 +27,6 @@
 #define ID_BTN_SCAN         110
 #define ID_BTN_EXTRACT      111
 #define ID_BTN_PROXY        112
-#define ID_BTN_STOP         116 // 预留，本次重构暂未实现复杂的停止逻辑
 
 // 结果与状态
 #define ID_LIST_RESULT      113
@@ -130,11 +130,9 @@ void start_task(TaskType type) {
     
     // 根据任务类型获取不同的输入
     if (type == TASK_SINGLE_SCAN) {
-        // 单个扫描：获取单独的输入框
-        p->targetInput = get_alloc_text(hEditSingleIp); // 这里只存一个IP
+        p->targetInput = get_alloc_text(hEditSingleIp); 
         p->portsInput = get_alloc_text(hEditSinglePort);
     } else {
-        // 批量任务：获取通用端口和目标源
         p->portsInput = get_alloc_text(hEditPorts);
 
         if (IsDlgButtonChecked(hMainWnd, ID_RADIO_FILE)) {
@@ -211,11 +209,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW+1);
     wc.lpszClassName = "NetToolProClass";
-    // 加载图标 (假设资源中有 IDI_ICON1)
     wc.hIcon = LoadIcon(hInstance, "IDI_MAIN_ICON"); 
     RegisterClassExA(&wc);
 
-    hMainWnd = CreateWindowExA(WS_EX_ACCEPTFILES, // 启用拖拽支持
+    hMainWnd = CreateWindowExA(WS_EX_ACCEPTFILES, 
         "NetToolProClass", "多功能网络工具 (C语言 Win32版)", 
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, 
         CW_USEDEFAULT, CW_USEDEFAULT, 920, 750, NULL, NULL, hInstance, NULL);
@@ -239,11 +236,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         {
             HFONT hFont = CreateFontA(14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH, "Microsoft YaHei");
 
-            // === 1. 批量任务输入区 (Group Box 模拟) ===
+            // === 1. 批量任务输入区 ===
             int grp1Y = 10;
             CreateWindowA("BUTTON", "批量任务设置", WS_CHILD|WS_VISIBLE|BS_GROUPBOX, 10, grp1Y, 880, 230, hWnd, NULL, hInst, NULL);
             
-            // 输入源选择
             CreateWindowA("BUTTON", "从文件:", WS_CHILD|WS_VISIBLE|BS_AUTORADIOBUTTON, 30, grp1Y+25, 80, 20, hWnd, (HMENU)ID_RADIO_FILE, hInst, NULL);
             hEditFile = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 110, grp1Y+23, 300, 23, hWnd, (HMENU)ID_EDIT_FILE, hInst, NULL);
             CreateWindowA("BUTTON", "浏览...", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 420, grp1Y+23, 60, 23, hWnd, (HMENU)ID_BTN_BROWSE, hInst, NULL);
@@ -252,25 +248,22 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             CreateWindowA("BUTTON", "粘贴文本:", WS_CHILD|WS_VISIBLE|BS_AUTORADIOBUTTON, 30, grp1Y+55, 80, 20, hWnd, (HMENU)ID_RADIO_TEXT, hInst, NULL);
             hEditText = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD|WS_VISIBLE|WS_VSCROLL|ES_MULTILINE|ES_WANTRETURN, 110, grp1Y+55, 370, 90, hWnd, (HMENU)ID_EDIT_TEXT, hInst, NULL);
 
-            // 文本框右侧：Ping 参数
             CreateWindowA("STATIC", "Ping超时(ms):", WS_CHILD|WS_VISIBLE, 500, grp1Y+55, 90, 20, hWnd, NULL, hInst, NULL);
             hEditTimeout = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "1000", WS_CHILD|WS_VISIBLE|ES_NUMBER, 600, grp1Y+53, 60, 23, hWnd, (HMENU)ID_EDIT_TIMEOUT, hInst, NULL);
             
             CreateWindowA("STATIC", "Ping次数:", WS_CHILD|WS_VISIBLE, 500, grp1Y+85, 90, 20, hWnd, NULL, hInst, NULL);
             hEditCount = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "5", WS_CHILD|WS_VISIBLE|ES_NUMBER, 600, grp1Y+83, 60, 23, hWnd, (HMENU)ID_EDIT_COUNT, hInst, NULL);
 
-            // 批量端口
             CreateWindowA("STATIC", "批量扫描端口:", WS_CHILD|WS_VISIBLE, 30, grp1Y+160, 90, 20, hWnd, NULL, hInst, NULL);
             hEditPorts = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "80,443,8080,1433,3306,3389", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 120, grp1Y+158, 750, 23, hWnd, (HMENU)ID_EDIT_PORTS, hInst, NULL);
 
-            // 功能按钮
             int btnY = grp1Y + 195;
             CreateWindowA("BUTTON", "开始批量 Ping", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 30, btnY, 120, 30, hWnd, (HMENU)ID_BTN_PING, hInst, NULL);
             CreateWindowA("BUTTON", "批量端口扫描", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 160, btnY, 120, 30, hWnd, (HMENU)ID_BTN_SCAN, hInst, NULL);
             CreateWindowA("BUTTON", "从文本提取IP", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 290, btnY, 120, 30, hWnd, (HMENU)ID_BTN_EXTRACT, hInst, NULL);
             hBtnProxy = CreateWindowA("BUTTON", "设置系统代理", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 420, btnY, 120, 30, hWnd, (HMENU)ID_BTN_PROXY, hInst, NULL);
 
-            // === 2. 单个目标扫描区 (补全遗漏功能) ===
+            // === 2. 单个目标扫描区 ===
             int grp2Y = 250;
             CreateWindowA("BUTTON", "单个目标扫描", WS_CHILD|WS_VISIBLE|BS_GROUPBOX, 10, grp2Y, 880, 60, hWnd, NULL, hInst, NULL);
             
@@ -294,7 +287,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             
             hStatus = CreateWindowExA(0, STATUSCLASSNAMEA, "就绪 - 支持拖拽文件输入", WS_CHILD|WS_VISIBLE|SBARS_SIZEGRIP, 0, 0, 0, 0, hWnd, (HMENU)ID_STATUS_BAR, hInst, NULL);
 
-            // 统一设置字体
             EnumChildWindows(hWnd, (WNDENUMPROC)(void(*)(HWND,LPARAM))SendMessageA, (LPARAM)hFont);
         }
         break;
@@ -406,7 +398,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         if (hList) {
             RECT rc;
             GetClientRect(hWnd, &rc);
-            // 简单调整列表大小
             SetWindowPos(hList, NULL, 0, 0, rc.right - 20, rc.bottom - 340 - 30, SWP_NOMOVE | SWP_NOZORDER);
         }
         break;
