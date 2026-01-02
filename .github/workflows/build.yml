@@ -1,7 +1,6 @@
 name: Build C Win32 Project
 
-# 修改点：将触发事件改为 workflow_dispatch (仅手动触发)
-on: 
+on:
   workflow_dispatch:
 
 jobs:
@@ -9,19 +8,18 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v3
+    # 升级 checkout 到 v4
+    - uses: actions/checkout@v4
 
     - name: Configure CMake
-      # 使用 Visual Studio 生成器配置项目
       run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=Release
 
     - name: Build
-      # 执行构建
       run: cmake --build ${{github.workspace}}/build --config Release
 
     - name: Upload Artifact
-      # 上传生成的 exe 文件
-      uses: actions/upload-artifact@v3
+      # 修复点：升级 upload-artifact 到 v4
+      uses: actions/upload-artifact@v4
       with:
         name: NetToolPro-Win32
         path: ${{github.workspace}}/build/Release/NetToolPro.exe
