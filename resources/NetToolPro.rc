@@ -1,7 +1,8 @@
 #include <windows.h>
 
-// 图标资源
-IDI_MAIN_ICON ICON "resources/app.ico"
+// 修复点：将 "resources/app.ico" 改为 "app.ico"
+// 因为此 rc 文件和 app.ico 都在同一个 resources 目录下
+IDI_MAIN_ICON ICON "app.ico"
 
 // 版本信息
 VS_VERSION_INFO VERSIONINFO
