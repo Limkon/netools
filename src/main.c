@@ -39,7 +39,7 @@
 #define IDM_COPY            201
 #define IDM_SELECT_ALL      202
 #define IDM_DEL_OFFLINE     203
-#define IDM_DEL_SELECTED    204 // [New] 删除选中项 ID
+#define IDM_DEL_SELECTED    204 
 
 HINSTANCE hInst;
 HWND hMainWnd, hList, hStatus;
@@ -48,11 +48,11 @@ HWND hEditSingleIp, hEditSinglePort;
 HWND hBtnProxy;
 int isProxySet = 0;
 HFONT hSystemFont = NULL; 
-TaskType g_currentTask = 0; // 记录当前任务类型
+TaskType g_currentTask = 0; 
 
-// [New] 排序相关全局变量
-int g_sortColumn = -1;      // 当前排序的列索引
-BOOL g_sortAscending = TRUE; // TRUE=升序, FALSE=降序
+// 排序相关全局变量
+int g_sortColumn = -1;      
+BOOL g_sortAscending = TRUE; 
 
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
@@ -111,9 +111,9 @@ void add_list_row(const wchar_t* pipedData) {
     free(copy);
 }
 
-// [New] 列表排序比较回调函数
+// 列表排序比较回调函数
 int CALLBACK CompareListViewItems(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort) {
-    int col = (int)lParamSort; // 当前点击的列
+    int col = (int)lParamSort; 
     
     wchar_t buf1[64] = {0}, buf2[64] = {0};
     ListView_GetItemText(hList, (int)lParam1, col, buf1, 63);
@@ -205,13 +205,10 @@ void DeleteOfflineItems() {
     SendMessage(hList, WM_SETREDRAW, TRUE, 0);
 }
 
-// [New] 删除选中项
 void DeleteSelectedItems() {
     int count = ListView_GetItemCount(hList);
     if (count <= 0) return;
-
-    SendMessage(hList, WM_SETREDRAW, FALSE, 0); // 暂停重绘
-    // 倒序删除，确保索引稳定
+    SendMessage(hList, WM_SETREDRAW, FALSE, 0); 
     for (int i = count - 1; i >= 0; i--) {
         if (ListView_GetItemState(hList, i, LVIS_SELECTED) == LVIS_SELECTED) {
             ListView_DeleteItem(hList, i);
@@ -257,11 +254,8 @@ void export_csv() {
 }
 
 void start_task(TaskType type) {
-    // 重置停止信号
     reset_stop_task();
     g_currentTask = type;
-    
-    // [New] 任务开始时重置排序状态
     g_sortColumn = -1;
     g_sortAscending = TRUE;
 
@@ -365,7 +359,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 
     hMainWnd = CreateWindowExW(WS_EX_ACCEPTFILES, 
         L"NetToolProClass", L"多功能网络工具 (C语言重构版 - Unicode)", 
-        WS_OVERLAPPEDWINDOW, // 移除 WS_CLIPCHILDREN
+        WS_OVERLAPPEDWINDOW, 
         CW_USEDEFAULT, CW_USEDEFAULT, 920, 750, NULL, NULL, hInstance, NULL);
 
     ShowWindow(hMainWnd, nCmdShow);
@@ -429,11 +423,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 
             CreateWindowW(L"STATIC", L"运行结果 (右键可复制/全选):", WS_CHILD|WS_VISIBLE, 10, 320, 200, 20, hWnd, NULL, hInst, NULL);
             
+            // 列表
             hList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", 
                 WS_CHILD|WS_VISIBLE|LVS_REPORT|LVS_SHOWSELALWAYS, 
                 10, 340, 880, 320, hWnd, (HMENU)ID_LIST_RESULT, hInst, NULL);
             ListView_SetExtendedListViewStyle(hList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
 
+            // [New] 导出按钮初始创建 (位置将在 WM_SIZE 中被立即重置)
             CreateWindowW(L"BUTTON", L"导出结果为 CSV", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 10, 670, 120, 25, hWnd, (HMENU)ID_BTN_EXPORT, hInst, NULL);
             
             hStatus = CreateWindowExW(0, STATUSCLASSNAMEW, L"就绪 - 支持拖拽文件输入", WS_CHILD|WS_VISIBLE|SBARS_SIZEGRIP, 0, 0, 0, 0, hWnd, (HMENU)ID_STATUS_BAR, hInst, NULL);
@@ -445,32 +441,24 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_NOTIFY:
         {
             LPNMHDR pnmh = (LPNMHDR)lParam;
-            // [New] 处理列头点击排序
             if (pnmh->idFrom == ID_LIST_RESULT && pnmh->code == LVN_COLUMNCLICK) {
                 LPNMLISTVIEW pnmv = (LPNMLISTVIEW)lParam;
                 int column = pnmv->iSubItem;
-
-                // 如果点击的是同一列，切换顺序；否则重置为升序
                 if (column != g_sortColumn) {
                     g_sortColumn = column;
                     g_sortAscending = TRUE;
                 } else {
                     g_sortAscending = !g_sortAscending;
                 }
-                
-                // 执行排序 (CompareListViewItems)
                 ListView_SortItemsEx(hList, CompareListViewItems, (LPARAM)column);
             }
-            // 处理右键菜单
             else if (pnmh->idFrom == ID_LIST_RESULT && pnmh->code == NM_RCLICK) {
                 POINT pt;
                 GetCursorPos(&pt);
                 HMENU hMenu = CreatePopupMenu();
                 AppendMenuW(hMenu, MF_STRING, IDM_COPY, L"复制选中内容");
                 AppendMenuW(hMenu, MF_STRING, IDM_SELECT_ALL, L"全选");
-                // [New] 添加删除选中项菜单
                 AppendMenuW(hMenu, MF_STRING, IDM_DEL_SELECTED, L"删除选中项");
-                
                 if (g_currentTask == TASK_PING) {
                     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                     AppendMenuW(hMenu, MF_STRING, IDM_DEL_OFFLINE, L"删除不在线/超时结果");
@@ -500,7 +488,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         case IDM_COPY: CopyListViewSelection(); break;
         case IDM_SELECT_ALL: ListView_SetItemState(hList, -1, LVIS_SELECTED, LVIS_SELECTED); break;
         case IDM_DEL_OFFLINE: DeleteOfflineItems(); break;
-        // [New] 处理删除选中项命令
         case IDM_DEL_SELECTED: DeleteSelectedItems(); break;
 
         case ID_BTN_STOP: 
@@ -589,17 +576,40 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         {
             wchar_t* msg = (wchar_t*)lParam;
             SendMessageW(hStatus, SB_SETTEXTW, 0, (LPARAM)msg);
-            MessageBoxW(hWnd, msg, L"任务完成", MB_OK);
+            // [Fix] 取消弹窗，只在状态栏提示
+            // MessageBoxW(hWnd, msg, L"任务完成", MB_OK);
             free(msg);
         }
         break;
         
     case WM_SIZE:
         SendMessage(hStatus, WM_SIZE, 0, 0);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        
+        // 1. 获取状态栏高度
+        RECT rcStatus;
+        GetWindowRect(hStatus, &rcStatus);
+        int statusHeight = rcStatus.bottom - rcStatus.top;
+        if (statusHeight == 0) statusHeight = 25; 
+
+        // 2. 调整导出按钮位置到右下角 (状态栏上方)
+        HWND hBtnExport = GetDlgItem(hWnd, ID_BTN_EXPORT);
+        if (hBtnExport) {
+            int btnW = 120;
+            int btnH = 25;
+            int margin = 10;
+            int x = rc.right - btnW - margin;
+            int y = rc.bottom - statusHeight - btnH - 5; 
+            SetWindowPos(hBtnExport, NULL, x, y, btnW, btnH, SWP_NOZORDER);
+        }
+
+        // 3. 调整列表大小，确保不覆盖底部按钮
         if (hList) {
-            RECT rc;
-            GetClientRect(hWnd, &rc);
-            SetWindowPos(hList, NULL, 0, 0, rc.right - 20, rc.bottom - 340 - 30, SWP_NOMOVE | SWP_NOZORDER);
+            int listBottomMargin = statusHeight + 35; // 预留给按钮和状态栏的空间
+            int listH = rc.bottom - 340 - listBottomMargin;
+            if (listH < 100) listH = 100; // 最小高度保护
+            SetWindowPos(hList, NULL, 0, 0, rc.right - 20, listH, SWP_NOMOVE | SWP_NOZORDER);
         }
         break;
 
