@@ -34,4 +34,4 @@ if(WIN32)
     )
     # 设置为 Windows GUI 子系统 (去除控制台窗口)
     set_target_properties(NetToolPro PROPERTIES WIN32_EXECUTABLE ON)
-endif()"
+endif()
