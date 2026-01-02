@@ -12,6 +12,10 @@
 #include <QMenu>
 #include <QTextStream>
 #include <QCloseEvent>
+// --- 修复点：添加以下两个头文件 ---
+#include <QApplication>
+#include <QClipboard>
+// -------------------------------
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setWindowTitle("多功能网络工具 (v3.7 C++重构版)");
