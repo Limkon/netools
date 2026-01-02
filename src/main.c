@@ -307,17 +307,22 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    // [Fix] 将窗口背景颜色改为系统按钮面颜色(灰色)，解决与控件的色差问题
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE+1);
+    
+    // [Fix 1] 彻底修复背景色：使用系统按钮灰色 (COLOR_BTNFACE)
+    // 这样窗口背景就变成了灰色，与控件默认背景色一致
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    
     wc.lpszClassName = L"NetToolProClass";
     wc.hIcon = LoadIcon(hInstance, L"IDI_MAIN_ICON"); 
     wc.hIconSm = wc.hIcon;
     
     RegisterClassExW(&wc);
 
+    // [Fix 2] 移除 WS_CLIPCHILDREN
+    // 之前可能因为这个样式导致父窗口不绘制控件背景，从而产生白边或刷新问题
     hMainWnd = CreateWindowExW(WS_EX_ACCEPTFILES, 
         L"NetToolProClass", L"多功能网络工具 (C语言重构版 - Unicode)", 
-        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, 
+        WS_OVERLAPPEDWINDOW, // 移除 WS_CLIPCHILDREN，确保背景完整刷新
         CW_USEDEFAULT, CW_USEDEFAULT, 920, 750, NULL, NULL, hInstance, NULL);
 
     ShowWindow(hMainWnd, nCmdShow);
@@ -539,15 +544,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         }
         break;
 
-    // === 修复界面色差问题 ===
-    // 1. 设置背景模式为透明 (TRANSPARENT)
-    // 2. 返回 COLOR_BTNFACE 画刷，确保与主窗口背景一致
+    // [Fix 3] 统一控件背景逻辑
+    // 强制静态文本、单选框、Groupbox 的背景色与主窗口(COLOR_BTNFACE)一致
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
         {
             HDC hdc = (HDC)wParam;
+            // 关键：强制设置文字背景色为灰色，防止某些情况下的透明失效
+            SetBkColor(hdc, GetSysColor(COLOR_BTNFACE));
             SetBkMode(hdc, TRANSPARENT);
-            // 返回系统按钮面颜色的画刷
+            // 返回灰色画刷，填充控件背景
             return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
         }
 
