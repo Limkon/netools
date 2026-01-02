@@ -6,6 +6,9 @@
 
 #pragma comment(lib, "comctl32.lib")
 
+// === 核心修复：强制启用 Windows 现代视觉样式 (Common Controls v6) ===
+#pragma comment(linker,"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+
 // --- 控件 ID 定义 ---
 #define ID_BTN_BROWSE       101
 #define ID_RADIO_FILE       102
@@ -35,18 +38,32 @@ HWND hEditFile, hEditText, hEditTimeout, hEditCount, hEditPorts;
 HWND hEditSingleIp, hEditSinglePort;
 HWND hBtnProxy;
 int isProxySet = 0;
-HFONT hSystemFont = NULL; // 全局系统字体
+HFONT hSystemFont = NULL; 
 
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
-// 获取系统默认界面字体 (解决字体乱码/丑陋问题)
+// 启用高 DPI 感知 (防止字体模糊)
+void EnableDPIAwareness() {
+    HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
+    if (hUser32) {
+        typedef BOOL (WINAPI * SetProcessDPIAwareFunc)();
+        SetProcessDPIAwareFunc setDPI = (SetProcessDPIAwareFunc)GetProcAddress(hUser32, "SetProcessDPIAware");
+        if (setDPI) setDPI();
+    }
+}
+
+// 获取系统默认界面字体
 HFONT GetSystemGuiFont() {
     NONCLIENTMETRICSW ncm;
     ncm.cbSize = sizeof(NONCLIENTMETRICSW);
+    // 尝试获取系统菜单字体
     if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICSW), &ncm, 0)) {
         return CreateFontIndirectW(&ncm.lfMessageFont);
     }
-    return (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    // 回退字体
+    return CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 
+                      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, 
+                      DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei UI");
 }
 
 wchar_t* get_alloc_text(HWND hwnd) {
@@ -197,13 +214,20 @@ void start_task(TaskType type) {
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     hInst = hInstance;
+    
+    // 1. 启用高 DPI (清晰字体)
+    EnableDPIAwareness();
+
     WSADATA wsa;
     WSAStartup(MAKEWORD(2,2), &wsa);
-    InitCommonControls(); 
+    
+    // 2. 初始化控件 (必须包含 ICC_STANDARD_CLASSES 才能让样式生效)
+    INITCOMMONCONTROLSEX ic = {sizeof(INITCOMMONCONTROLSEX), ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES};
+    InitCommonControlsEx(&ic); 
 
-    // === 修复点：将结构体类型改为 WNDCLASSEXW ===
+    // 3. 注册窗口类 (使用 WNDCLASSEXW 修复编译错误)
     WNDCLASSEXW wc = {0};
-    wc.cbSize = sizeof(WNDCLASSEXW); // 正确赋值大小
+    wc.cbSize = sizeof(WNDCLASSEXW); // 必须设置大小
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
@@ -211,8 +235,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW+1);
     wc.lpszClassName = L"NetToolProClass";
     wc.hIcon = LoadIcon(hInstance, L"IDI_MAIN_ICON"); 
-    // WNDCLASSEX 独有的成员
-    wc.hIconSm = wc.hIcon; 
+    wc.hIconSm = wc.hIcon; // 设置小图标
     
     RegisterClassExW(&wc);
 
