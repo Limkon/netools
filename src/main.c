@@ -67,12 +67,12 @@ void add_list_row(const char* pipedData) {
     lvItem.iSubItem = 0;
     lvItem.pszText = token ? token : "";
     
-    // 修复：使用标准宏 ListView_InsertItem (它会自动处理结构体)
+    // 使用标准宏 ListView_InsertItem
     ListView_InsertItem(hList, &lvItem);
     
     int col = 1;
     while ((token = strtok_s(NULL, "|", &ctx))) {
-        // 修复：使用标准宏 ListView_SetItemText
+        // 使用标准宏 ListView_SetItemText
         ListView_SetItemText(hList, lvItem.iItem, col++, token);
     }
     free(copy);
@@ -101,7 +101,7 @@ void export_csv() {
             char buf[256];
             for (int j = 0; j < colCount; j++) {
                 HDITEMA hdi = { HDI_TEXT, 0, buf, NULL, 255, 0 };
-                // 修复：使用标准宏 Header_GetItem
+                // 使用标准宏 Header_GetItem
                 Header_GetItem(hHeader, j, &hdi);
                 fprintf(fp, "%s%s", j == 0 ? "" : ",", buf);
             }
@@ -110,7 +110,7 @@ void export_csv() {
             // 写入数据
             for (int i = 0; i < rowCount; i++) {
                 for (int j = 0; j < colCount; j++) {
-                    // 修复：使用标准宏 ListView_GetItemText
+                    // 使用标准宏 ListView_GetItemText
                     ListView_GetItemText(hList, i, j, buf, sizeof(buf));
                     fprintf(fp, "%s%s", j == 0 ? "" : ",", buf);
                 }
@@ -170,7 +170,7 @@ void start_task(TaskType type) {
         char* cols[] = {"目标地址", "状态", "平均延迟(ms)", "丢包率(%)", "TTL"};
         for(int i=0; i<5; i++) {
             LVCOLUMNA lvc = {0}; lvc.mask = LVCF_TEXT | LVCF_WIDTH; lvc.pszText = cols[i]; lvc.cx = (i==0?180:100);
-            // 修复：使用标准宏 ListView_InsertColumn
+            // 使用标准宏 ListView_InsertColumn
             ListView_InsertColumn(hList, i, &lvc);
         }
         _beginthreadex(NULL, 0, thread_ping, p, 0, NULL);
@@ -353,8 +353,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                     break;
                 }
                 char ip[64] = {0}, portStr[16] = {0};
-                ListView_GetItemTextA(hList, idx, 0, ip, sizeof(ip)); 
-                ListView_GetItemTextA(hList, idx, 1, portStr, sizeof(portStr));
+                // 修复：之前漏掉的 A 后缀
+                ListView_GetItemText(hList, idx, 0, ip, sizeof(ip)); 
+                ListView_GetItemText(hList, idx, 1, portStr, sizeof(portStr));
                 
                 int port = atoi(portStr);
                 if (port > 0 && port < 65536) {
