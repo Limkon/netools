@@ -1,4 +1,5 @@
 #include "network_tools.h"
+#include <wininet.h> // === 修复：必须包含此头文件以定义 HINTERNET ===
 #include <iphlpapi.h>
 #include <icmpapi.h>
 #include <stdio.h>
@@ -7,11 +8,7 @@
 
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
-
-// 自定义消息，用于通知主窗口
-#define WM_USER_LOG     (WM_USER + 100) // wParam=Progress, lParam=StringPtr
-#define WM_USER_RESULT  (WM_USER + 101) // wParam=0, lParam=StringPtr (CSV row)
-#define WM_USER_FINISH  (WM_USER + 102) // wParam=0, lParam=MessageString
+#pragma comment(lib, "wininet.lib")
 
 // 全局代理备份变量
 static DWORD g_originalProxyEnable = 0;
@@ -20,7 +17,7 @@ static int g_hasBackup = 0;
 
 // --- 辅助工具 ---
 
-// 简单的字符串分割并去重，返回字符串数组，count为传出数量
+// 字符串分割
 char** split_hosts(const char* input, int* count) {
     if (!input) { *count = 0; return NULL; }
     
@@ -30,7 +27,6 @@ char** split_hosts(const char* input, int* count) {
     int n = 0;
 
     char* context = NULL;
-    // 使用 strtok_s 进行安全分割
     char* token = strtok_s(copy, " \t\n\r,", &context);
     while (token) {
         if (n >= capacity) {
@@ -51,11 +47,11 @@ void free_string_list(char** list, int count) {
     free(list);
 }
 
-// 解析端口字符串 "80, 443, 8080-8085"
+// 解析端口
 int* parse_ports(const char* portStr, int* count) {
     if (!portStr) { *count = 0; return NULL; }
     
-    int* ports = (int*)malloc(sizeof(int) * 65535); // 最大可能
+    int* ports = (int*)malloc(sizeof(int) * 65535); 
     int n = 0;
     
     char* copy = _strdup(portStr);
@@ -63,7 +59,6 @@ int* parse_ports(const char* portStr, int* count) {
     char* token = strtok_s(copy, ",", &context);
     
     while (token) {
-        // --- 修复点：strchr 第二个参数改为单引号字符 '-' ---
         if (strchr(token, '-')) {
             int start, end;
             if (sscanf_s(token, "%d-%d", &start, &end) == 2) {
@@ -80,7 +75,7 @@ int* parse_ports(const char* portStr, int* count) {
     return ports;
 }
 
-// 辅助：发送结果到 UI
+// 辅助消息发送
 void post_result(HWND hwnd, const char* col1, const char* col2, const char* col3, const char* col4, const char* col5) {
     char buffer[1024];
     snprintf(buffer, sizeof(buffer), "%s|%s|%s|%s|%s", 
@@ -99,7 +94,8 @@ void post_finish(HWND hwnd, const char* msg) {
     PostMessage(hwnd, WM_USER_FINISH, 0, (LPARAM)_strdup(msg));
 }
 
-// --- Ping 任务 ---
+// --- 任务实现 ---
+
 unsigned int __stdcall thread_ping(void* arg) {
     ThreadParams* p = (ThreadParams*)arg;
     int count;
@@ -170,7 +166,6 @@ unsigned int __stdcall thread_ping(void* arg) {
     return 0;
 }
 
-// --- 端口扫描任务 ---
 unsigned int __stdcall thread_port_scan(void* arg) {
     ThreadParams* p = (ThreadParams*)arg;
     int hostCount, portCount;
@@ -191,7 +186,6 @@ unsigned int __stdcall thread_port_scan(void* arg) {
             SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
             if (sock == INVALID_SOCKET) continue;
 
-            // 设置非阻塞模式
             unsigned long mode = 1;
             ioctlsocket(sock, FIONBIO, &mode);
 
@@ -200,7 +194,6 @@ unsigned int __stdcall thread_port_scan(void* arg) {
             addr.sin_port = htons(port);
             addr.sin_addr.s_addr = inet_addr(hosts[i]);
             
-            // 如果是域名则解析
             if (addr.sin_addr.s_addr == INADDR_NONE) {
                  struct hostent* he = gethostbyname(hosts[i]);
                  if (he) memcpy(&addr.sin_addr, he->h_addr, he->h_length);
@@ -209,13 +202,12 @@ unsigned int __stdcall thread_port_scan(void* arg) {
 
             connect(sock, (struct sockaddr*)&addr, sizeof(addr));
 
-            // 使用 select 等待连接结果
             fd_set writeFds;
             FD_ZERO(&writeFds);
             FD_SET(sock, &writeFds);
             
             struct timeval tv;
-            tv.tv_sec = 2; // 2秒超时
+            tv.tv_sec = 2; 
             tv.tv_usec = 0;
 
             int ret = select(0, NULL, &writeFds, NULL, &tv);
@@ -237,7 +229,6 @@ unsigned int __stdcall thread_port_scan(void* arg) {
     return 0;
 }
 
-// --- 提取 IP 任务 ---
 unsigned int __stdcall thread_extract_ip(void* arg) {
     ThreadParams* p = (ThreadParams*)arg;
     char* content = p->targetInput;
@@ -250,7 +241,6 @@ unsigned int __stdcall thread_extract_ip(void* arg) {
     int dots = 0;
     int lastCharWasDigit = 0;
 
-    // 简单状态机
     for (int i = 0; i <= len; i++) {
         char c = content[i];
         if (isdigit((unsigned char)c)) {
@@ -283,7 +273,6 @@ unsigned int __stdcall thread_extract_ip(void* arg) {
     return 0;
 }
 
-// --- 单个扫描 (简化复用端口扫描逻辑) ---
 unsigned int __stdcall thread_single_scan(void* arg) {
     return thread_port_scan(arg); 
 }
@@ -306,14 +295,14 @@ HKEY open_internet_settings(REGSAM access) {
 }
 
 void refresh_internet_settings() {
-    // 动态加载 Wininet 以避免链接问题
     HMODULE hWininet = LoadLibraryA("wininet.dll");
     if (hWininet) {
+        // === 修复：确保类型与 wininet.h 中定义的一致 ===
         typedef BOOL (WINAPI *ISO)(HINTERNET, DWORD, LPVOID, DWORD);
         ISO pInternetSetOption = (ISO)GetProcAddress(hWininet, "InternetSetOptionA");
         if (pInternetSetOption) {
-            pInternetSetOption(NULL, 39, NULL, 0); // INTERNET_OPTION_SETTINGS_CHANGED
-            pInternetSetOption(NULL, 37, NULL, 0); // INTERNET_OPTION_REFRESH
+            pInternetSetOption(NULL, 39, NULL, 0); 
+            pInternetSetOption(NULL, 37, NULL, 0); 
         }
         FreeLibrary(hWininet);
     }
