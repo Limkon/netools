@@ -1,16 +1,16 @@
 #ifndef NETWORK_TOOLS_H
 #define NETWORK_TOOLS_H
 
-// === 核心修复：必须在 windows.h 之前包含 winsock2.h ===
+// 包含顺序必须正确
 #include <winsock2.h>
 #include <windows.h>
+#include <tchar.h> // 支持宽字符宏
 
-// === 修复：将消息定义移至头文件，供 main.c 和 network_tools.c 共享 ===
-#define WM_USER_LOG     (WM_USER + 100) // wParam=Progress, lParam=StringPtr
-#define WM_USER_RESULT  (WM_USER + 101) // wParam=0, lParam=StringPtr (CSV row)
-#define WM_USER_FINISH  (WM_USER + 102) // wParam=0, lParam=MessageString
+// 消息定义
+#define WM_USER_LOG     (WM_USER + 100) 
+#define WM_USER_RESULT  (WM_USER + 101) 
+#define WM_USER_FINISH  (WM_USER + 102) 
 
-// 任务类型定义
 typedef enum {
     TASK_PING = 1,
     TASK_SCAN,
@@ -18,17 +18,17 @@ typedef enum {
     TASK_EXTRACT
 } TaskType;
 
-// 线程参数结构
+// 参数结构体改为宽字符
 typedef struct {
-    HWND hwndNotify;      // 接收消息的主窗口句柄
-    char* targetInput;    // 目标字符串
-    char* portsInput;     // 端口字符串
-    int retryCount;       // Ping次数
-    int timeoutMs;        // 超时时间
+    HWND hwndNotify;
+    wchar_t* targetInput;  // 宽字符输入
+    wchar_t* portsInput;   // 宽字符端口
+    int retryCount;
+    int timeoutMs;
 } ThreadParams;
 
-// 代理管理
-int proxy_set_system(const char* ip, int port);
+// 代理管理 (输入为宽字符，内部转 ANSI)
+int proxy_set_system(const wchar_t* ip, int port);
 int proxy_unset_system();
 void proxy_init_backup(); 
 
@@ -38,7 +38,6 @@ unsigned int __stdcall thread_port_scan(void* arg);
 unsigned int __stdcall thread_single_scan(void* arg);
 unsigned int __stdcall thread_extract_ip(void* arg);
 
-// 辅助
 void free_thread_params(ThreadParams* params);
 
 #endif // NETWORK_TOOLS_H
