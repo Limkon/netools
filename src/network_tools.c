@@ -14,7 +14,7 @@ static DWORD g_originalProxyEnable = 0;
 static wchar_t g_originalProxyServer[256] = {0};
 static int g_hasBackup = 0;
 
-// 全局停止信号 (原子操作建议使用 InterlockedExchange，但在简单场景 volatile int 配合内存屏障或简单读取通常足够，这里使用 volatile)
+// 全局停止信号
 static volatile int g_stopSignal = 0;
 
 void signal_stop_task() {
@@ -90,6 +90,8 @@ int* parse_ports(const wchar_t* portStr, int* count) {
     return ports;
 }
 
+// --- UI 消息辅助 ---
+
 void post_result(HWND hwnd, const wchar_t* col1, const wchar_t* col2, const wchar_t* col3, const wchar_t* col4, const wchar_t* col5) {
     wchar_t buffer[1024];
     swprintf_s(buffer, 1024, L"%s|%s|%s|%s|%s", 
@@ -107,6 +109,33 @@ void post_log(HWND hwnd, int progress, const wchar_t* text) {
 void post_finish(HWND hwnd, const wchar_t* msg) {
     PostMessageW(hwnd, WM_USER_FINISH, 0, (LPARAM)_wcsdup(msg));
 }
+
+// --- 界面字体设置辅助 (新增) ---
+
+// 回调函数：给单个子窗口设置字体
+static BOOL CALLBACK EnumChildProcSetFont(HWND hWndChild, LPARAM lParam) {
+    // 发送 WM_SETFONT 消息，TRUE 表示立即重绘
+    SendMessage(hWndChild, WM_SETFONT, (WPARAM)lParam, TRUE);
+    return TRUE;
+}
+
+// 主函数：将父窗口字体应用到所有子控件
+void SetWindowFontToChildren(HWND hParent) {
+    // 1. 获取父窗口当前的字体
+    HFONT hFont = (HFONT)SendMessage(hParent, WM_GETFONT, 0, 0);
+
+    // 2. 如果父窗口未设置字体（返回NULL），则使用系统默认的 GUI 字体
+    if (hFont == NULL) {
+        hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        // 顺便把父窗口也设置一下，保证统一
+        SendMessage(hParent, WM_SETFONT, (WPARAM)hFont, TRUE);
+    }
+
+    // 3. 遍历所有子控件并应用字体
+    EnumChildWindows(hParent, EnumChildProcSetFont, (LPARAM)hFont);
+}
+
+// --- 任务线程逻辑 ---
 
 unsigned int __stdcall thread_ping(void* arg) {
     ThreadParams* p = (ThreadParams*)arg;
@@ -320,6 +349,8 @@ void free_thread_params(ThreadParams* params) {
         free(params);
     }
 }
+
+// --- 代理与注册表辅助 ---
 
 HKEY open_internet_settings(REGSAM access) {
     HKEY hKey;
