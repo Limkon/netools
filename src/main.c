@@ -27,7 +27,7 @@
 #define ID_BTN_SCAN         110
 #define ID_BTN_EXTRACT      111
 #define ID_BTN_PROXY        112
-#define ID_BTN_STOP         116 // [New] 停止按钮
+#define ID_BTN_STOP         116 
 
 #define ID_LIST_RESULT      113
 #define ID_STATUS_BAR       114
@@ -70,6 +70,14 @@ HFONT GetFixedSystemFont() {
     return CreateFontW(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, 
                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, 
                       DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei UI");
+}
+
+// [Fix] 新增：用于正确设置子控件字体的回调函数
+BOOL CALLBACK EnumChildProcSetFont(HWND hWndChild, LPARAM lParam) {
+    // lParam 传入的是 hSystemFont
+    // 发送 WM_SETFONT 消息，(WPARAM)字体句柄, (LPARAM)TRUE=立即重绘
+    SendMessageW(hWndChild, WM_SETFONT, (WPARAM)lParam, TRUE);
+    return TRUE;
 }
 
 wchar_t* get_alloc_text(HWND hwnd) {
@@ -383,7 +391,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             
             hStatus = CreateWindowExW(0, STATUSCLASSNAMEW, L"就绪 - 支持拖拽文件输入", WS_CHILD|WS_VISIBLE|SBARS_SIZEGRIP, 0, 0, 0, 0, hWnd, (HMENU)ID_STATUS_BAR, hInst, NULL);
 
-            EnumChildWindows(hWnd, (WNDENUMPROC)(void(*)(HWND,LPARAM))SendMessageW, (LPARAM)hSystemFont);
+            // [Fix] 核心修复：使用正确的回调函数来设置子控件字体
+            EnumChildWindows(hWnd, EnumChildProcSetFont, (LPARAM)hSystemFont);
         }
         break;
 
