@@ -10,13 +10,23 @@
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "wininet.lib")
 
+// 注册表路径常量
+#define REG_PATH_PROXY L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"
+
+// 代理备份变量
 static DWORD g_originalProxyEnable = 0;
 static wchar_t g_originalProxyServer[256] = {0};
 static int g_hasBackup = 0;
 
-// --- 字符串转换辅助 ---
+// [MandalaECH] 系统版本判断
+BOOL IsWindows8OrGreater() {
+    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+    if (hKernel32 == NULL) return FALSE;
+    FARPROC pFunc = GetProcAddress(hKernel32, "SetProcessMitigationPolicy");
+    return (pFunc != NULL);
+}
 
-// 宽字符转 ANSI (用于网络 API)
+// --- 字符串转换辅助 ---
 char* wide_to_ansi(const wchar_t* wstr) {
     if (!wstr) return NULL;
     int len = WideCharToMultiByte(CP_ACP, 0, wstr, -1, NULL, 0, NULL, NULL);
@@ -25,7 +35,6 @@ char* wide_to_ansi(const wchar_t* wstr) {
     return str;
 }
 
-// 分割宽字符串
 wchar_t** split_hosts(const wchar_t* input, int* count) {
     if (!input) { *count = 0; return NULL; }
     
@@ -55,7 +64,6 @@ void free_string_list(wchar_t** list, int count) {
     free(list);
 }
 
-// 解析端口 (宽字符版)
 int* parse_ports(const wchar_t* portStr, int* count) {
     if (!portStr) { *count = 0; return NULL; }
     
@@ -83,7 +91,6 @@ int* parse_ports(const wchar_t* portStr, int* count) {
     return ports;
 }
 
-// 发送结果 (宽字符版)
 void post_result(HWND hwnd, const wchar_t* col1, const wchar_t* col2, const wchar_t* col3, const wchar_t* col4, const wchar_t* col5) {
     wchar_t buffer[1024];
     swprintf_s(buffer, 1024, L"%s|%s|%s|%s|%s", 
@@ -102,7 +109,6 @@ void post_finish(HWND hwnd, const wchar_t* msg) {
     PostMessageW(hwnd, WM_USER_FINISH, 0, (LPARAM)_wcsdup(msg));
 }
 
-// --- Ping 任务 ---
 unsigned int __stdcall thread_ping(void* arg) {
     ThreadParams* p = (ThreadParams*)arg;
     int count;
@@ -116,7 +122,7 @@ unsigned int __stdcall thread_ping(void* arg) {
         return 0;
     }
 
-    char sendData[] = "NetToolPing"; // ICMP payload 仍用 ASCII
+    char sendData[] = "NetToolPing";
     DWORD replySize = sizeof(ICMP_ECHO_REPLY) + sizeof(sendData);
     void* replyBuffer = malloc(replySize);
 
@@ -125,7 +131,6 @@ unsigned int __stdcall thread_ping(void* arg) {
         swprintf_s(statusMsg, 256, L"正在 Ping (%d/%d): %s...", i + 1, count, hosts[i]);
         post_log(p->hwndNotify, (i * 100) / count, statusMsg);
 
-        // 网络层需要转换回 ANSI
         char* ansiHost = wide_to_ansi(hosts[i]);
         unsigned long ip = inet_addr(ansiHost);
         if (ip == INADDR_NONE) {
@@ -177,7 +182,6 @@ unsigned int __stdcall thread_ping(void* arg) {
     return 0;
 }
 
-// --- 端口扫描任务 ---
 unsigned int __stdcall thread_port_scan(void* arg) {
     ThreadParams* p = (ThreadParams*)arg;
     int hostCount, portCount;
@@ -245,7 +249,6 @@ unsigned int __stdcall thread_port_scan(void* arg) {
     return 0;
 }
 
-// --- IP 提取任务 ---
 unsigned int __stdcall thread_extract_ip(void* arg) {
     ThreadParams* p = (ThreadParams*)arg;
     wchar_t* content = p->targetInput;
@@ -302,26 +305,18 @@ void free_thread_params(ThreadParams* params) {
     }
 }
 
-// --- 代理管理 ---
+// [MandalaECH] 代理管理辅助
 HKEY open_internet_settings(REGSAM access) {
     HKEY hKey;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", 0, access, &hKey) == ERROR_SUCCESS) {
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_PATH_PROXY, 0, access, &hKey) == ERROR_SUCCESS) {
         return hKey;
     }
     return NULL;
 }
 
 void refresh_internet_settings() {
-    HMODULE hWininet = LoadLibraryW(L"wininet.dll");
-    if (hWininet) {
-        typedef BOOL (WINAPI *ISO)(HINTERNET, DWORD, LPVOID, DWORD);
-        ISO pInternetSetOption = (ISO)GetProcAddress(hWininet, "InternetSetOptionW");
-        if (pInternetSetOption) {
-            pInternetSetOption(NULL, 39, NULL, 0); 
-            pInternetSetOption(NULL, 37, NULL, 0); 
-        }
-        FreeLibrary(hWininet);
-    }
+    InternetSetOptionW(NULL, INTERNET_OPTION_SETTINGS_CHANGED, NULL, 0);
+    InternetSetOptionW(NULL, INTERNET_OPTION_REFRESH, NULL, 0);
 }
 
 void proxy_init_backup() {
@@ -339,30 +334,64 @@ void proxy_init_backup() {
 
 int proxy_set_system(const wchar_t* ip, int port) {
     proxy_init_backup();
-    HKEY hKey = open_internet_settings(KEY_WRITE);
-    if (!hKey) return 0;
-
-    DWORD enable = 1;
     wchar_t server[128];
     swprintf_s(server, 128, L"%s:%d", ip, port);
 
-    RegSetValueExW(hKey, L"ProxyEnable", 0, REG_DWORD, (BYTE*)&enable, sizeof(enable));
-    RegSetValueExW(hKey, L"ProxyServer", 0, REG_SZ, (BYTE*)server, (wcslen(server) + 1) * sizeof(wchar_t));
+    if (IsWindows8OrGreater()) {
+        // Windows 8+ 直接操作注册表
+        HKEY hKey = open_internet_settings(KEY_WRITE);
+        if (hKey) {
+            DWORD enable = 1;
+            RegSetValueExW(hKey, L"ProxyEnable", 0, REG_DWORD, (BYTE*)&enable, sizeof(enable));
+            RegSetValueExW(hKey, L"ProxyServer", 0, REG_SZ, (BYTE*)server, (wcslen(server) + 1) * sizeof(wchar_t));
+            RegSetValueExW(hKey, L"ProxyOverride", 0, REG_SZ, (BYTE*)L"<local>", 16);
+            RegCloseKey(hKey);
+        }
+    } else {
+        // Windows 7 使用 InternetSetOption
+        INTERNET_PER_CONN_OPTION_LISTW list;
+        INTERNET_PER_CONN_OPTIONW opts[3];
+        opts[0].dwOption = INTERNET_PER_CONN_FLAGS;
+        opts[0].Value.dwValue = PROXY_TYPE_PROXY | PROXY_TYPE_DIRECT;
+        opts[1].dwOption = INTERNET_PER_CONN_PROXY_SERVER;
+        opts[1].Value.pszValue = server;
+        opts[2].dwOption = INTERNET_PER_CONN_PROXY_BYPASS;
+        opts[2].Value.pszValue = L"<local>";
+
+        list.dwSize = sizeof(list);
+        list.pszConnection = NULL;
+        list.dwOptionCount = 3;
+        list.pOptions = opts;
+        InternetSetOptionW(NULL, INTERNET_OPTION_PER_CONNECTION_OPTION, &list, sizeof(list));
+    }
     
-    RegCloseKey(hKey);
     refresh_internet_settings();
     return 1;
 }
 
 int proxy_unset_system() {
     if (!g_hasBackup) return 1;
-    HKEY hKey = open_internet_settings(KEY_WRITE);
-    if (!hKey) return 0;
 
-    RegSetValueExW(hKey, L"ProxyEnable", 0, REG_DWORD, (BYTE*)&g_originalProxyEnable, sizeof(DWORD));
-    RegSetValueExW(hKey, L"ProxyServer", 0, REG_SZ, (BYTE*)g_originalProxyServer, (wcslen(g_originalProxyServer) + 1) * sizeof(wchar_t));
+    if (IsWindows8OrGreater()) {
+        HKEY hKey = open_internet_settings(KEY_WRITE);
+        if (hKey) {
+            RegSetValueExW(hKey, L"ProxyEnable", 0, REG_DWORD, (BYTE*)&g_originalProxyEnable, sizeof(DWORD));
+            RegSetValueExW(hKey, L"ProxyServer", 0, REG_SZ, (BYTE*)g_originalProxyServer, (wcslen(g_originalProxyServer) + 1) * sizeof(wchar_t));
+            RegCloseKey(hKey);
+        }
+    } else {
+        INTERNET_PER_CONN_OPTION_LISTW list;
+        INTERNET_PER_CONN_OPTIONW opts[1];
+        opts[0].dwOption = INTERNET_PER_CONN_FLAGS;
+        opts[0].Value.dwValue = PROXY_TYPE_DIRECT; 
 
-    RegCloseKey(hKey);
+        list.dwSize = sizeof(list);
+        list.pszConnection = NULL;
+        list.dwOptionCount = 1;
+        list.pOptions = opts;
+        InternetSetOptionW(NULL, INTERNET_OPTION_PER_CONNECTION_OPTION, &list, sizeof(list));
+    }
+
     refresh_internet_settings();
     g_hasBackup = 0;
     return 1;
