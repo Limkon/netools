@@ -64,7 +64,7 @@ int* parse_ports(const char* portStr, int* count) {
     char* token = strtok_s(copy, ",", &context);
     
     while (token) {
-        if (strchr(token, '-')) {
+        if (strchr(token, "-")) {
             int start, end;
             if (sscanf_s(token, "%d-%d", &start, &end) == 2) {
                 for (int i = start; i <= end; i++) ports[n++] = i;
