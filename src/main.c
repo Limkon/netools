@@ -27,10 +27,16 @@
 #define ID_BTN_SCAN         110
 #define ID_BTN_EXTRACT      111
 #define ID_BTN_PROXY        112
+#define ID_BTN_STOP         116 // [New] 停止按钮
 
 #define ID_LIST_RESULT      113
 #define ID_STATUS_BAR       114
 #define ID_BTN_EXPORT       115
+
+// 右键菜单 ID
+#define IDM_COPY            201
+#define IDM_SELECT_ALL      202
+#define IDM_DEL_OFFLINE     203
 
 HINSTANCE hInst;
 HWND hMainWnd, hList, hStatus;
@@ -39,10 +45,11 @@ HWND hEditSingleIp, hEditSinglePort;
 HWND hBtnProxy;
 int isProxySet = 0;
 HFONT hSystemFont = NULL; 
+TaskType g_currentTask = 0; // 记录当前任务类型，用于菜单判断
 
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
-// 启用高 DPI 感知 (防止字体模糊)
+// 启用高 DPI 感知
 void EnableDPIAwareness() {
     HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
     if (hUser32) {
@@ -52,18 +59,17 @@ void EnableDPIAwareness() {
     }
 }
 
-// 获取系统默认界面字体
-HFONT GetSystemGuiFont() {
-    NONCLIENTMETRICSW ncm;
-    ncm.cbSize = sizeof(NONCLIENTMETRICSW);
-    // 尝试获取系统菜单字体
-    if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICSW), &ncm, 0)) {
-        return CreateFontIndirectW(&ncm.lfMessageFont);
-    }
-    // 回退字体
-    return CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 
-                      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, 
-                      DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei UI");
+// [Fix] 明确创建标准字体，解决加粗问题
+HFONT GetFixedSystemFont() {
+    // 使用 Microsoft YaHei UI，大小 9pt (约 12px)，FW_NORMAL (400) 确保不加粗
+    HDC hdc = GetDC(NULL);
+    int logPixelsY = GetDeviceCaps(hdc, LOGPIXELSY);
+    ReleaseDC(NULL, hdc);
+    int height = -MulDiv(9, logPixelsY, 72); 
+
+    return CreateFontW(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, 
+                      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, 
+                      DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei UI");
 }
 
 wchar_t* get_alloc_text(HWND hwnd) {
@@ -92,6 +98,67 @@ void add_list_row(const wchar_t* pipedData) {
         ListView_SetItemText(hList, lvItem.iItem, col++, token);
     }
     free(copy);
+}
+
+// 复制列表选中项
+void CopyListViewSelection() {
+    int count = ListView_GetSelectedCount(hList);
+    if (count == 0) return;
+
+    // 估算缓冲区大小
+    int bufSize = count * 256; 
+    wchar_t* buffer = (wchar_t*)malloc(bufSize * sizeof(wchar_t));
+    buffer[0] = 0;
+
+    int item = -1;
+    while ((item = ListView_GetNextItem(hList, item, LVNI_SELECTED)) != -1) {
+        wchar_t line[1024] = {0};
+        wchar_t cell[256];
+        
+        // 获取列数
+        HWND hHeader = ListView_GetHeader(hList);
+        int cols = Header_GetItemCount(hHeader);
+
+        for (int i = 0; i < cols; i++) {
+            ListView_GetItemText(hList, item, i, cell, 256);
+            wcscat_s(line, 1024, cell);
+            if (i < cols - 1) wcscat_s(line, 1024, L"\t");
+        }
+        wcscat_s(line, 1024, L"\r\n");
+        
+        // 扩容检查
+        if (wcslen(buffer) + wcslen(line) >= bufSize) {
+            bufSize *= 2;
+            buffer = (wchar_t*)realloc(buffer, bufSize * sizeof(wchar_t));
+        }
+        wcscat_s(buffer, bufSize, line);
+    }
+
+    if (OpenClipboard(hMainWnd)) {
+        EmptyClipboard();
+        size_t size = (wcslen(buffer) + 1) * sizeof(wchar_t);
+        HGLOBAL hGlob = GlobalAlloc(GMEM_MOVEABLE, size);
+        memcpy(GlobalLock(hGlob), buffer, size);
+        GlobalUnlock(hGlob);
+        SetClipboardData(CF_UNICODETEXT, hGlob);
+        CloseClipboard();
+    }
+    free(buffer);
+}
+
+// 删除不在线的结果
+void DeleteOfflineItems() {
+    int count = ListView_GetItemCount(hList);
+    // 倒序删除，防止索引错乱
+    SendMessage(hList, WM_SETREDRAW, FALSE, 0); // 暂停重绘提升性能
+    for (int i = count - 1; i >= 0; i--) {
+        wchar_t status[64];
+        ListView_GetItemText(hList, i, 1, status, 64); // 假设状态在第2列(Index 1)
+        if (wcsstr(status, L"超时") || wcsstr(status, L"无效")) {
+            ListView_DeleteItem(hList, i);
+        }
+    }
+    SendMessage(hList, WM_SETREDRAW, TRUE, 0);
 }
 
 void export_csv() {
@@ -133,6 +200,10 @@ void export_csv() {
 }
 
 void start_task(TaskType type) {
+    // 重置停止信号
+    reset_stop_task();
+    g_currentTask = type;
+
     ThreadParams* p = (ThreadParams*)malloc(sizeof(ThreadParams));
     if (!p) return;
     memset(p, 0, sizeof(ThreadParams));
@@ -214,20 +285,16 @@ void start_task(TaskType type) {
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     hInst = hInstance;
-    
-    // 1. 启用高 DPI (清晰字体)
     EnableDPIAwareness();
 
     WSADATA wsa;
     WSAStartup(MAKEWORD(2,2), &wsa);
     
-    // 2. 初始化控件 (必须包含 ICC_STANDARD_CLASSES 才能让样式生效)
     INITCOMMONCONTROLSEX ic = {sizeof(INITCOMMONCONTROLSEX), ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES};
     InitCommonControlsEx(&ic); 
 
-    // 3. 注册窗口类 (使用 WNDCLASSEXW 修复编译错误)
     WNDCLASSEXW wc = {0};
-    wc.cbSize = sizeof(WNDCLASSEXW); // 必须设置大小
+    wc.cbSize = sizeof(WNDCLASSEXW);
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
@@ -235,7 +302,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW+1);
     wc.lpszClassName = L"NetToolProClass";
     wc.hIcon = LoadIcon(hInstance, L"IDI_MAIN_ICON"); 
-    wc.hIconSm = wc.hIcon; // 设置小图标
+    wc.hIconSm = wc.hIcon;
     
     RegisterClassExW(&wc);
 
@@ -262,8 +329,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
     switch (message) {
     case WM_CREATE:
         {
-            // 获取系统字体
-            hSystemFont = GetSystemGuiFont();
+            // 使用修正后的字体函数
+            hSystemFont = GetFixedSystemFont();
 
             int grp1Y = 10;
             CreateWindowW(L"BUTTON", L"批量任务设置", WS_CHILD|WS_VISIBLE|BS_GROUPBOX, 10, grp1Y, 880, 230, hWnd, NULL, hInst, NULL);
@@ -289,7 +356,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             CreateWindowW(L"BUTTON", L"开始批量 Ping", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 30, btnY, 120, 30, hWnd, (HMENU)ID_BTN_PING, hInst, NULL);
             CreateWindowW(L"BUTTON", L"批量端口扫描", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 160, btnY, 120, 30, hWnd, (HMENU)ID_BTN_SCAN, hInst, NULL);
             CreateWindowW(L"BUTTON", L"从文本提取IP", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 290, btnY, 120, 30, hWnd, (HMENU)ID_BTN_EXTRACT, hInst, NULL);
-            hBtnProxy = CreateWindowW(L"BUTTON", L"设置系统代理", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 420, btnY, 120, 30, hWnd, (HMENU)ID_BTN_PROXY, hInst, NULL);
+            // [New] 停止按钮
+            CreateWindowW(L"BUTTON", L"中止任务", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 420, btnY, 100, 30, hWnd, (HMENU)ID_BTN_STOP, hInst, NULL);
+            
+            hBtnProxy = CreateWindowW(L"BUTTON", L"设置系统代理", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 530, btnY, 100, 30, hWnd, (HMENU)ID_BTN_PROXY, hInst, NULL);
 
             int grp2Y = 250;
             CreateWindowW(L"BUTTON", L"单个目标扫描", WS_CHILD|WS_VISIBLE|BS_GROUPBOX, 10, grp2Y, 880, 60, hWnd, NULL, hInst, NULL);
@@ -302,7 +372,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             
             CreateWindowW(L"BUTTON", L"扫描指定目标", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 600, grp2Y+20, 120, 30, hWnd, (HMENU)ID_BTN_SINGLE_SCAN, hInst, NULL);
 
-            CreateWindowW(L"STATIC", L"运行结果:", WS_CHILD|WS_VISIBLE, 10, 320, 80, 20, hWnd, NULL, hInst, NULL);
+            CreateWindowW(L"STATIC", L"运行结果 (右键可复制/全选):", WS_CHILD|WS_VISIBLE, 10, 320, 200, 20, hWnd, NULL, hInst, NULL);
             
             hList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", 
                 WS_CHILD|WS_VISIBLE|LVS_REPORT|LVS_SHOWSELALWAYS, 
@@ -313,8 +383,27 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             
             hStatus = CreateWindowExW(0, STATUSCLASSNAMEW, L"就绪 - 支持拖拽文件输入", WS_CHILD|WS_VISIBLE|SBARS_SIZEGRIP, 0, 0, 0, 0, hWnd, (HMENU)ID_STATUS_BAR, hInst, NULL);
 
-            // 应用字体到所有控件
             EnumChildWindows(hWnd, (WNDENUMPROC)(void(*)(HWND,LPARAM))SendMessageW, (LPARAM)hSystemFont);
+        }
+        break;
+
+    // [New] 处理右键菜单
+    case WM_NOTIFY:
+        if (((LPNMHDR)lParam)->idFrom == ID_LIST_RESULT && ((LPNMHDR)lParam)->code == NM_RCLICK) {
+            POINT pt;
+            GetCursorPos(&pt);
+            HMENU hMenu = CreatePopupMenu();
+            AppendMenuW(hMenu, MF_STRING, IDM_COPY, L"复制选中内容");
+            AppendMenuW(hMenu, MF_STRING, IDM_SELECT_ALL, L"全选");
+            
+            // 只有是 Ping 任务时才显示删除不在线
+            if (g_currentTask == TASK_PING) {
+                AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+                AppendMenuW(hMenu, MF_STRING, IDM_DEL_OFFLINE, L"删除不在线/超时结果");
+            }
+            
+            TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, NULL);
+            DestroyMenu(hMenu);
         }
         break;
 
@@ -334,6 +423,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 
     case WM_COMMAND:
         switch(LOWORD(wParam)) {
+        // [New] 菜单命令
+        case IDM_COPY: CopyListViewSelection(); break;
+        case IDM_SELECT_ALL: ListView_SetItemState(hList, -1, LVIS_SELECTED, LVIS_SELECTED); break;
+        case IDM_DEL_OFFLINE: DeleteOfflineItems(); break;
+
+        // [New] 停止任务
+        case ID_BTN_STOP: 
+            signal_stop_task(); 
+            SendMessageW(hStatus, SB_SETTEXTW, 0, (LPARAM)L"正在尝试中止任务...");
+            break;
+
         case ID_BTN_BROWSE:
             {
                 wchar_t path[MAX_PATH] = {0};
