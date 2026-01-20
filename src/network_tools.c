@@ -1,21 +1,36 @@
 #include "network_tools.h"
-#include "network_modules.h" // 引入新模块
+#include "network_modules.h" // 引入拆分后的模块定义
+#include <wininet.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <process.h>
+#include <string.h> 
+#include <ws2tcpip.h> // for GetAddrInfoW
 
+#pragma comment(lib, "iphlpapi.lib")
+#pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "wininet.lib")
 
+// --- 全局变量 ---
 static DWORD g_originalProxyEnable = 0;
 static wchar_t g_originalProxyServer[256] = {0};
 static int g_hasBackup = 0;
-static volatile int g_stopSignal = 0;
+static volatile int g_stopSignal = 0; // 全局停止信号
 
-void signal_stop_task() { g_stopSignal = 1; }
-void reset_stop_task() { g_stopSignal = 0; }
-int is_task_stopped() { return g_stopSignal; }
+// --- 任务控制信号 ---
+void signal_stop_task() {
+    g_stopSignal = 1;
+}
 
-// --- 实现共享辅助函数 ---
+void reset_stop_task() {
+    g_stopSignal = 0;
+}
+
+int is_task_stopped() {
+    return g_stopSignal;
+}
+
+// --- 字符串转换辅助 ---
 char* wide_to_ansi(const wchar_t* wstr) {
     if (!wstr) return NULL;
     int len = WideCharToMultiByte(CP_ACP, 0, wstr, -1, NULL, 0, NULL, NULL);
@@ -24,17 +39,20 @@ char* wide_to_ansi(const wchar_t* wstr) {
     return str;
 }
 
+// GBK 转 Unicode (主要用于模块内部调用)
 void gbk_to_wide(const char* gbk, wchar_t* buf, int bufLen) {
     if (!gbk || !buf) return;
     MultiByteToWideChar(CP_ACP, 0, gbk, -1, buf, bufLen);
 }
 
-// 辅助：解析域名/IP，优先返回 IPv4，支持 IPv6
-// 返回: 0=失败, 4=IPv4, 6=IPv6. 结果存入 addrOut (sockaddr_in 或 sockaddr_in6)
+// --- 地址解析辅助 (支持 IPv4/IPv6/域名) ---
+// 返回值: 0=失败, 4=IPv4, 6=IPv6
+// 结果存入 addrOut (需分配足够的空间，如 sizeof(struct sockaddr_in6))
 int resolve_host(const wchar_t* host, void* addrOut) {
     struct addrinfoW hints = {0};
     hints.ai_family = AF_UNSPEC; // 允许 v4 和 v6
     hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
     
     struct addrinfoW* result = NULL;
     if (GetAddrInfoW(host, NULL, &hints, &result) != 0) return 0;
@@ -55,22 +73,25 @@ int resolve_host(const wchar_t* host, void* addrOut) {
         ptr = ptr->ai_next;
     }
 
+    // 如果没有找到 v4 但找到了 v6，则使用 v6
     if (type == 0 && v6Res) {
         memcpy(addrOut, v6Res->ai_addr, sizeof(struct sockaddr_in6));
         type = 6;
     }
 
-    FreeAddrInfoW(result);
+    if (result) FreeAddrInfoW(result);
     return type;
 }
 
-// --- 保持原有的字符串处理辅助 ---
+// --- 列表处理辅助 ---
 wchar_t** split_hosts(const wchar_t* input, int* count) {
     if (!input) { *count = 0; return NULL; }
+    
     wchar_t* copy = _wcsdup(input);
     int capacity = 10;
     wchar_t** list = (wchar_t**)malloc(sizeof(wchar_t*) * capacity);
     int n = 0;
+
     wchar_t* context = NULL;
     wchar_t* token = wcstok_s(copy, L" \t\n\r,", &context);
     while (token) {
@@ -81,6 +102,7 @@ wchar_t** split_hosts(const wchar_t* input, int* count) {
         list[n++] = _wcsdup(token);
         token = wcstok_s(NULL, L" \t\n\r,", &context);
     }
+    
     free(copy);
     *count = n;
     return list;
@@ -94,11 +116,14 @@ void free_string_list(wchar_t** list, int count) {
 
 int* parse_ports(const wchar_t* portStr, int* count) {
     if (!portStr) { *count = 0; return NULL; }
+    
     int* ports = (int*)malloc(sizeof(int) * 65535); 
     int n = 0;
+    
     wchar_t* copy = _wcsdup(portStr);
     wchar_t* context = NULL;
     wchar_t* token = wcstok_s(copy, L",", &context);
+    
     while (token) {
         if (wcschr(token, L'-')) {
             int start, end;
@@ -119,9 +144,15 @@ int* parse_ports(const wchar_t* portStr, int* count) {
 // --- UI 消息辅助 ---
 void post_result(HWND hwnd, const wchar_t* col1, const wchar_t* col2, const wchar_t* col3, const wchar_t* col4, const wchar_t* col5, const wchar_t* col6) {
     wchar_t buffer[1024];
+    // 格式化并通过管道符分隔，UI层会解析并插入列表
     swprintf_s(buffer, 1024, L"%s|%s|%s|%s|%s|%s", 
-             col1 ? col1 : L"", col2 ? col2 : L"", col3 ? col3 : L"", 
-             col4 ? col4 : L"", col5 ? col5 : L"", col6 ? col6 : L"-");
+             col1 ? col1 : L"", 
+             col2 ? col2 : L"", 
+             col3 ? col3 : L"", 
+             col4 ? col4 : L"", 
+             col5 ? col5 : L"",
+             col6 ? col6 : L"-"); 
+    
     wchar_t* msg = _wcsdup(buffer);
     PostMessageW(hwnd, WM_USER_RESULT, 0, (LPARAM)msg);
 }
@@ -135,7 +166,7 @@ void post_finish(HWND hwnd, const wchar_t* msg) {
     PostMessageW(hwnd, WM_USER_FINISH, 0, (LPARAM)_wcsdup(msg));
 }
 
-// --- 任务线程逻辑 (重构后使用模块) ---
+// --- 任务线程逻辑 ---
 
 unsigned int __stdcall thread_ping(void* arg) {
     ThreadParams* p = (ThreadParams*)arg;
@@ -143,9 +174,9 @@ unsigned int __stdcall thread_ping(void* arg) {
     wchar_t** hosts = split_hosts(p->targetInput, &count);
     HWND hwnd = p->hwndNotify; 
 
-    // 初始化 v4 IP库
+    // 初始化 IPv4 库 (如果需要显示归属地)
     if (p->showLocation) ipv4_init_qqwry();
-
+    
     for (int i = 0; i < count; i++) {
         if (g_stopSignal) { post_log(hwnd, 0, L"任务已中止"); break; }
 
@@ -153,7 +184,7 @@ unsigned int __stdcall thread_ping(void* arg) {
         swprintf_s(statusMsg, 256, L"正在 Ping (%d/%d): %s...", i + 1, count, hosts[i]);
         post_log(hwnd, (i * 100) / count, statusMsg);
 
-        // 解析地址 (支持 IPv4 和 IPv6)
+        // 解析地址 (自动识别 IPv4 或 IPv6)
         union {
             struct sockaddr_in v4;
             struct sockaddr_in6 v6;
@@ -167,20 +198,19 @@ unsigned int __stdcall thread_ping(void* arg) {
         int ttl = 0;
 
         if (type == 4) {
-            // 获取 IPv4 归属地
+            // IPv4: 获取归属地并 Ping
             if (p->showLocation) {
                  ipv4_get_location(inet_ntoa(addr.v4.sin_addr), location, 256);
             }
-            // 调用 v4 模块
             success = ipv4_ping_host(addr.v4.sin_addr.s_addr, p->retryCount, p->timeoutMs, &avgRtt, &ttl);
         } 
         else if (type == 6) {
-            // IPv6 暂不支持归属地，显示占位
+            // IPv6: 暂无归属地库，显示类型
             wcscpy_s(location, 256, L"IPv6地址");
-            // 调用 v6 模块
             success = ipv6_ping_host(&addr.v6, p->retryCount, p->timeoutMs, &avgRtt, &ttl);
         }
         else {
+             // 解析失败
              post_result(hwnd, hosts[i], L"无效地址", L"N/A", L"100", L"N/A", L"未知");
              continue;
         }
@@ -190,7 +220,8 @@ unsigned int __stdcall thread_ping(void* arg) {
         wchar_t rttStr[32], lossStr[32], ttlStr[32];
         if (success) {
             swprintf_s(rttStr, 32, L"%ld", avgRtt);
-            swprintf_s(lossStr, 32, L"0"); // 简化：模块返回成功即视为连通，不计算丢包率
+            // 简单实现：只要通了就算 0% 丢包，如果完全不通下面会显示超时
+            swprintf_s(lossStr, 32, L"0"); 
             swprintf_s(ttlStr, 32, L"%d", ttl);
             post_result(hwnd, hosts[i], L"在线", rttStr, lossStr, ttlStr, location);
         } else {
@@ -227,6 +258,7 @@ unsigned int __stdcall thread_port_scan(void* arg) {
             struct sockaddr_in6 v6;
         } addr;
         
+        // 针对每个主机只解析一次
         int type = resolve_host(hosts[i], &addr);
         wchar_t location[256] = {0};
 
@@ -238,6 +270,7 @@ unsigned int __stdcall thread_port_scan(void* arg) {
 
         for (int j = 0; j < portCount; j++) {
             if (g_stopSignal) break; 
+
             current++;
             int port = ports[j];
             wchar_t msg[256];
@@ -245,8 +278,9 @@ unsigned int __stdcall thread_port_scan(void* arg) {
             post_log(hwnd, (current * 100) / (total ? total : 1), msg);
 
             int open = 0;
+            // 根据类型调用不同的扫描模块
             if (type == 4) {
-                open = ipv4_tcp_scan(addr.v4.sin_addr.s_addr, port, 2000); // 2秒超时
+                open = ipv4_tcp_scan(addr.v4.sin_addr.s_addr, port, 2000); // 默认 2s 超时
             } else if (type == 6) {
                 open = ipv6_tcp_scan(&addr.v6, port, 2000);
             }
@@ -273,23 +307,33 @@ unsigned int __stdcall thread_extract_ip(void* arg) {
     ThreadParams* p = (ThreadParams*)arg;
     HWND hwnd = p->hwndNotify;
     
+    // 初始化 IP 库 (用于 IPv4 提取时的归属地)
     if (p->showLocation) ipv4_init_qqwry();
 
-    post_log(hwnd, 0, L"正在分析文本...");
+    post_log(hwnd, 0, L"正在分析文本 (IPv4 / IPv6 / 域名)...");
     
-    // 依次执行 V4 和 V6 提取
+    // 1. 提取 IPv4
     ipv4_extract_search(p->targetInput, hwnd, p->showLocation);
-    ipv6_extract_search(p->targetInput, hwnd);
+    if (g_stopSignal) goto cleanup;
 
+    // 2. 提取 IPv6
+    ipv6_extract_search(p->targetInput, hwnd);
+    if (g_stopSignal) goto cleanup;
+
+    // 3. 提取 域名
+    domain_extract_search(p->targetInput, hwnd);
+
+cleanup:
     if (p->showLocation) ipv4_cleanup_qqwry();
     free_thread_params(p);
     
     if (g_stopSignal) post_finish(hwnd, L"任务已由用户中止。");
-    else post_finish(hwnd, L"IP 提取完成。");
+    else post_finish(hwnd, L"提取任务完成。");
     return 0;
 }
 
 unsigned int __stdcall thread_single_scan(void* arg) {
+    // 单个扫描复用端口扫描逻辑
     return thread_port_scan(arg); 
 }
 
@@ -301,8 +345,8 @@ void free_thread_params(ThreadParams* params) {
     }
 }
 
-// ... Proxy 代码保持原样，无需修改 ...
-// (省略 Proxy 相关代码，因其仅涉及注册表操作且原代码未变，请保留原有实现)
+// --- 代理设置相关 (保持原样) ---
+
 HKEY open_internet_settings(REGSAM access) {
     HKEY hKey;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", 0, access, &hKey) == ERROR_SUCCESS) {
