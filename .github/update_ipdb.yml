@@ -1,0 +1,101 @@
+name: Update IP Database
+
+on:
+  schedule:
+    - cron: '0 2 * * 1' # 每周一凌晨 2 点自动运行（UTC时间）
+  workflow_dispatch: # 允许在 GitHub Actions 页面手动点击运行触发
+
+permissions:
+  contents: write # 赋予写入权限，以便将转换后的 TXT 文件提交回仓库
+
+jobs:
+  export-txt-db:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Download and Convert QQWry.dat to TXT
+        run: |
+          cat << 'EOF' > parse_qqwry.py
+          import urllib.request, struct, os
+
+          # --- 纯真 IP 库二进制解析引擎 ---
+          def int3(data, offset):
+              return data[offset] + (data[offset+1] << 8) + (data[offset+2] << 16)
+
+          def get_string(data, offset):
+              # 0x00 表示字符串结束，0x02 表示字符串重定向
+              if data[offset] == 0:
+                  return "", offset + 1
+              elif data[offset] == 2:
+                  ptr = int3(data, offset + 1)
+                  return get_string(data, ptr)[0], offset + 4
+              
+              end = data.find(b'\0', offset)
+              try:
+                  s = data[offset:end].decode('gbk', 'ignore')
+              except:
+                  s = "未知"
+              return s, end + 1
+
+          def get_location(data, offset):
+              # 0x01 表示国家和地区均被重定向
+              if data[offset] == 1:
+                  return get_location(data, int3(data, offset + 1))
+              
+              country, next_offset = get_string(data, offset)
+              area, _ = get_string(data, next_offset)
+              
+              # 清理无用后缀，并将文本内的逗号替换为空格（防阻断CSV解析）
+              res = (country + " " + area).replace(' CZ88.NET', '').replace(',', ' ').strip()
+              return res if res else "未知"
+
+          print("Downloading latest qqwry.dat from mirror...")
+          # 采用稳定的纯真 IP 库每日更新开源镜像
+          urllib.request.urlretrieve("https://raw.githubusercontent.com/FW27623/qqwry/main/qqwry.dat", "qqwry.dat")
+
+          print("Parsing binary format and exporting to txt...")
+          with open("qqwry.dat", "rb") as f:
+              data = f.read()
+
+          first_index = struct.unpack('<I', data[0:4])[0]
+          last_index = struct.unpack('<I', data[4:8])[0]
+
+          # 确保 resources 目录存在
+          os.makedirs("resources", exist_ok=True)
+          count = 0
+          
+          # 使用 UTF-8 编码导出为 CSV 文本格式
+          with open("resources/ipdb.txt", "w", encoding="utf-8") as out:
+              for idx in range(first_index, last_index + 1, 7):
+                  start_ip = struct.unpack('<I', data[idx:idx+4])[0]
+                  offset = int3(data, idx+4)
+                  end_ip = struct.unpack('<I', data[offset:offset+4])[0]
+                  loc = get_location(data, offset + 4)
+                  
+                  # 转换为标准的 IPv4 字符串格式
+                  sip = f"{(start_ip>>24)&0xff}.{(start_ip>>16)&0xff}.{(start_ip>>8)&0xff}.{start_ip&0xff}"
+                  eip = f"{(end_ip>>24)&0xff}.{(end_ip>>16)&0xff}.{(end_ip>>8)&0xff}.{end_ip&0xff}"
+                  
+                  # 写入行：起始IP,结束IP,归属地
+                  out.write(f"{sip},{eip},{loc}\n")
+                  count += 1
+
+          print(f"Success! Exported {count} records to resources/ipdb.txt")
+          EOF
+          python3 parse_qqwry.py
+
+      - name: Commit and Push TXT to Repository
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add resources/ipdb.txt
+          # 如果文件有更新则提交，无更新则静默跳过
+          git commit -m "Auto-update IP Database text format (resources/ipdb.txt)" || echo "No changes to commit"
+          git push
